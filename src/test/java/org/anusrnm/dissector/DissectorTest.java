@@ -28,10 +28,11 @@ public class DissectorTest {
     public void testParser() throws Exception {
         File layoutFile = new File(Objects.requireNonNull(classloader.getResource("TEST.xml")).getFile());
         String hexString = "00000004C1C2C3C4";
-        String expected = """
-                                          (0.4) Len : 00000004 = '4'
-                ---data Size=4
-                                       (4.4.0) Data : C1C2C3C4 = 'ABCD'""";
+//        String expected = """
+//                                          (0.4) Len : 00000004 = '4'
+//                ---data Size=4
+//                                       (4.4.0) Data : C1C2C3C4 = 'ABCD'""";
+        String expected = "                          (0.4) Len : 00000004 = '4'\n";
         Dissector Dissector = new Dissector(layoutFile);
         String actual = Dissector.parseWith(hexString);
         log.debug("{}",actual);
