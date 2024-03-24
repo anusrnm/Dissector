@@ -10,11 +10,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.GregorianCalendar;
-import java.util.List;
+import java.util.*;
 
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -31,7 +27,8 @@ class Dissector {
     private static final GregorianCalendar TPF_EPOCH = new GregorianCalendar(1966, Calendar.FEBRUARY, 2);
     private static final GregorianCalendar TOD_EPOCH = new GregorianCalendar(1900, Calendar.FEBRUARY, 1);
     private static final String TOD_ADJUST = "1.048576";
-    private final StringBuilder res;
+    private static final int MAX_COUNTER = 500;
+    private StringBuilder res;
     private String inputStr;
     private final Document doc;
     private final String layoutType;
@@ -40,6 +37,7 @@ class Dissector {
     private boolean trackLen = false;
     private long useFieldLen = 0;
     private final String folder;
+    private final String formatting = "d";
 
     Dissector(File layout) throws IOException, SAXException, ParserConfigurationException {
         this.folder = layout.getParent();
@@ -49,16 +47,18 @@ class Dissector {
         DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
         this.doc = dBuilder.parse(layout);
         this.layoutType = doc.getDocumentElement().getAttribute("type");
-        this.res = new StringBuilder();
     }
 
-    static String getInType(String fieldValue, String fieldType) {
+    public static String getInType(String fieldValue, String fieldType) {
         String fieldValueInType = "";
         if (fieldValue.isEmpty()) {
-            return "";
+            throw new IllegalArgumentException("empty input");
         }
         switch (fieldType.toLowerCase()) {
             case "parsd":
+                if (fieldValue.length() < 4) {
+                    throw new IllegalArgumentException("minimum 4 hex chars are required");
+                }
                 int parsd = Integer.parseInt(fieldValue, 16);
                 if (parsd != 0) {
                     Calendar cal = new GregorianCalendar(1966, Calendar.JANUARY, 2);
@@ -68,6 +68,9 @@ class Dissector {
                 }
                 break;
             case "tod":
+                if  (fieldValue.length() < 8) {
+                    throw new IllegalArgumentException("minimum 8 hex chars are required");
+                }
                 BigInteger tod = new BigInteger(fieldValue.substring(0, 8), 16);
                 if (tod.intValue() != 0) {
                     BigDecimal actualSeconds = new BigDecimal(TOD_ADJUST).multiply(new BigDecimal(tod));
@@ -94,6 +97,9 @@ class Dissector {
                 fieldValueInType = String.format("%02d:%02d", mins / 60, mins % 60);
                 break;
             case "hhmm":
+                if  (fieldValue.length() < 4) {
+                    throw new IllegalArgumentException("minimum 4 hex chars are required");
+                }
                 int hh = Integer.parseInt(fieldValue.substring(0, 2), 16);
                 int mm = Integer.parseInt(fieldValue.substring(2, 4), 16);
                 if (hh != 0 || mm != 0)
@@ -216,14 +222,71 @@ class Dissector {
         return value;
     }
 
+    public static Map<String, String> convertToMap(String input) {
+        Map<String, String> resultMap = new HashMap<>();
+        String[] pairs = input.split(",");
+        for (String pair : pairs) {
+            String[] keyValue = pair.split("=");
+            if (keyValue.length == 2) {
+                resultMap.put(keyValue[0], keyValue[1]);
+            }
+        }
+        return resultMap;
+    }
+
+    public static boolean isBitSet(long number, int bitPosition) {
+        // Shift 1 to the left by the specified bit position
+        long mask = 1L << bitPosition;
+        // Perform bitwise AND with the number
+        return (number & mask) != 0;
+    }
+
+    public static List<String> getBitValue(int i, Map<String, String> fieldValuesMap) {
+        List<String> values = new ArrayList<>();
+        String val = fieldValuesMap.get("80");
+        if (isBitSet(i,7) && val != null) {
+            values.add(val);
+        }
+        val = fieldValuesMap.get("40");
+        if (isBitSet(i,6) && val != null) {
+            values.add(val);
+        }
+        val = fieldValuesMap.get("20");
+        if (isBitSet(i,5) && val != null) {
+            values.add(val);
+        }
+        val = fieldValuesMap.get("10");
+        if (isBitSet(i,4) && val != null) {
+            values.add(val);
+        }
+        val = fieldValuesMap.get("08");
+        if (isBitSet(i,3) && val != null) {
+            values.add(val);
+        }
+        val = fieldValuesMap.get("04");
+        if (isBitSet(i,2) && val != null) {
+            values.add(val);
+        }
+        val = fieldValuesMap.get("02");
+        if (isBitSet(i,1) && val != null) {
+            values.add(val);
+        }
+        val = fieldValuesMap.get("01");
+        if (isBitSet(i,0) && val != null) {
+            values.add(val);
+        }
+        return values;
+    }
+
     String parseWith(String hexString) {
+        res = new StringBuilder();
         this.inputStr = hexString;
         parseWith(doc.getDocumentElement());
         return res.toString();
     }
 
-    private int parseWith(Element root) {
-        List<Element> fl = getChildElementsByTagName(root, "field");
+    private int parseWith(Element parent) {
+        List<Element> fl = getChildElementsByTagName(parent, "field");
         if (fl.isEmpty()) {
             res.append(
                     String.format("Warning: No fields found in the layout to parse %s%s%s", LS, getFieldValue(-1), LS));
@@ -232,10 +295,20 @@ class Dissector {
             String fieldName = field.getAttribute("name");
             String fieldType = field.getAttribute("type");
             String fieldKind = field.getAttribute("kind");
+            String fieldForAttr = field.getAttribute("for");
             String fieldLength = field.getAttribute("length");
             String fieldValuesAttr = field.getAttribute("values");
             String fieldMinusAttr = field.getAttribute("minus");
             String fieldSearchTypeAttr = field.getAttribute("searchtype");
+            var fieldMinusVal = 0;
+            if (!fieldMinusAttr.isEmpty()) {
+                try {
+                    fieldMinusVal = Integer.parseInt(fieldMinusAttr);
+                }catch (Exception any) {
+                    res.append(String.format("\nInvalid attribute (minus) for %s \n", fieldName ));
+                    return -10;
+                }
+            }
             int fieldLengthInt = 0;
             if (!fieldKind.equalsIgnoreCase("filler")) {
                 try {
@@ -246,7 +319,7 @@ class Dissector {
                     return -10;
                 }
             }
-            String temp = String.format("(%d.%s) %s", displ, fieldLength, fieldName);
+            String temp = String.format(formatting.equals("h")?"(%x.%s) %s": "(%d.%s) %s", displ, fieldLength, fieldName);
             if (!fieldLength.isEmpty()) {
                 displ += fieldLengthInt;
             }
@@ -264,7 +337,168 @@ class Dissector {
             if (trackLen & !fieldLength.isEmpty()) {
                 fillerLen += fieldLengthInt;
             }
-            res.append(String.format("%35s : ", temp));
+            StringBuilder outputString = new StringBuilder();
+            outputString.append(String.format("%35s : ", temp));
+            switch (fieldKind){
+                case "counter":  res.append(outputString);
+                    String repeatCount = getFieldValue(fieldLengthInt);
+                    var headElement = getNextSiblingHeadElement(field);
+                    var currentStruc = getMatchingElement(parent, "struc", "name", fieldForAttr,"start");
+                    if (currentStruc == null) {
+                        res.append(String.format("'%s'\nError: '%s' Struc layout not found.\n", repeatCount, fieldForAttr));
+                        return -3;
+                    }
+                    var iRepeatCount = 0;
+                    var radix = layoutType.equalsIgnoreCase("dsect")? 16: 10;
+                    try {
+                        iRepeatCount = Integer.parseInt(repeatCount, radix);
+                    }catch (NumberFormatException nfe) {
+                        res.append(String.format("Invalid counter %s\n", repeatCount));
+                        return -2;
+                    }
+                    if (iRepeatCount > MAX_COUNTER) {
+                        res.append(String.format("Warning: Counter value %d ('%s') too high (max=%d)\n",
+                                iRepeatCount, repeatCount, MAX_COUNTER));
+                        return -2;
+                    }
+                    res.append(String.format("'%s\n", repeatCount));
+                    if (headElement != null) {
+                        int ret = parseWith(headElement);
+                        if (ret != 0) {
+                            return -1;
+                        }
+                    }
+                    for (int i=0; i< iRepeatCount; i++) {
+                        res.append(String.format("%s %d of %d :\n", fieldForAttr, i+1, iRepeatCount));
+                        int ret = parseWith(currentStruc);
+                        if (ret != 0) {
+                            return -1;
+                        }
+                    }
+                    break;
+                case "version":
+                    break;
+                case "group":
+                    break;
+                case "length":
+                    break;
+                case "filler":
+                    if (useFieldLen != 0) {
+                        fillerLen = useFieldLen - fillerLen;
+                    }
+                    String fieldValue = "";
+                    if (fillerLen != 0) {
+                        fieldValue = getFieldValue(fillerLen);
+                    }
+                    trackLen = false;
+                    fillerLen = -1;
+                    useFieldLen = 0;
+                    if (!fieldValue.isEmpty()) {
+                        String strucName = field.getAttribute("for");
+                        if (strucName.isEmpty()) {
+                            String opString = "";
+                            if (layoutType.equalsIgnoreCase("dsect")) {
+                                opString += String.format("%35s : ", String.format("(%d.%d) %s", displ, fieldValue.length()/2, fieldName));
+                                String fit;
+                                try {
+                                    fit = getInType(fieldValue, fieldType);
+                                } catch (Exception any){
+                                    res.append(String.format("\nInvalid data %s %s %s\n", fieldName, any.getMessage(), fieldValue));
+                                    return -10;
+                                }
+                                res.append(String.format("%s%s = '%s'\n", opString, fieldValue, fit));
+                            } else {
+                                opString += String.format("%35s: ", String.format("(%d.%d) %s", displ, fieldValue.length(), fieldName));
+                                res.append(String.format("%s'%s'\n", opString, fieldValue));
+                            }
+                        } else {
+                            Element currentStruc2 = getMatchingElement(parent, "struc", "name", strucName, "start");
+                            if (currentStruc2 == null) { //  TODO: try the name as layout file
+                                res.append(String.format("Error: '%s' Struc layout not found. %s\n", strucName, "File not found");
+                                return -6;
+                            }
+                            res.append(String.format("---%s [Rest of the data]:\n", strucName));
+                            String restOfInput = getFieldValue(-1);
+                            inputStr = fieldValue;
+                            int ret = 0;
+                            while(!inputStr.isEmpty()) {
+                                ret = parseWith(currentStruc2);
+                                if (ret != 0) {
+                                    break;
+                                }
+                            }
+                            inputStr = restOfInput; //Restore
+                            if (ret != 0) {
+                                return ret;
+                            }
+                        }
+                    }
+                    break;
+                default:
+                    res.append(outputString);
+                    if (fieldLength.isEmpty()) {
+                        res.append("Error: Length attribute not provided\n");
+                        return -10;
+                    }
+                    var fieldValue = getFieldValue(fieldLengthInt);
+                    fieldValuesAttr = field.getAttribute("values");
+                    var fieldValuesMap = convertToMap(fieldValuesAttr);
+                    var fieldValueMeaning = fieldValuesMap.get(fieldValue);
+                    if (fieldValueMeaning != null) {
+                        fieldValueMeaning = String.format(" (%s)", fieldValueMeaning);
+                    }
+                    if (fieldType.equalsIgnoreCase("B") && !fieldValuesMap.isEmpty()) {
+                        int i;
+                        try {
+                            i = Integer.parseInt(fieldValue, 16);
+                        }catch (NumberFormatException nfe) {
+                            res.append(String.format("\nInvalid data: %s\n", fieldValue));
+                            return -10;
+                        }
+                        List<String> bitValueList = getBitValue(i, fieldValuesMap);
+                        if (!bitValueList.isEmpty()) {
+                            if (bitValueList.size() > 1) {
+                                fieldValueMeaning = "\n" + String.format("%-35s", String.join("\n", bitValueList));
+                            } else {
+                                fieldValueMeaning = String.format(" (%s)", String.join(",", bitValueList));
+                            }
+                        }
+                    }
+                    if (layoutType.equalsIgnoreCase("dsect")) {
+                        String fit;
+                        try {
+                            fit = getInType(fieldValue, fieldType);
+                        } catch (Exception any) {
+                            res.append(String.format("\nInvalid data %s %s\n", any.getMessage(), fieldValue));
+                            return -10;
+                        }
+                        String formatterFit = "";
+                        if (!fit.isEmpty()) {
+                            formatterFit = String.format(" = '%s'", fit);
+                        }
+                        var fval1 = fieldValuesMap.get(fieldValue);
+                        var fval = fieldValuesMap.get(fit);
+                        if (fval1 == null && fval != null) {
+                            fieldValueMeaning = String.format(" (%s)", fval);
+                        }
+                        res.append(String.format("%s%s%s\n", fieldValue, formatterFit, fieldValueMeaning));
+
+                        if (fieldValue.length() != 2* fieldLengthInt) {
+                            res.append(String.format("Warning: %s value not lengthy enough (Current length: %d)\n", fieldName, fieldValue.length()/2));
+                            return -11;
+                        }
+                    } else {
+                        if (fieldValueMeaning != null) {
+                            res.append(String.format("'%s' (%s)\n", fieldValue, fieldValueMeaning));
+                        } else {
+                            res.append(String.format("'%s'\n", fieldValue));
+                        }
+                        if (fieldValue.length() != fieldLengthInt) {
+                            res.append(String.format("Warning: %s value not lengthy enough (Current Length: %d\n", fieldName, fieldValue.length()));
+                            return -11;
+                        }
+                    }
+            }
         }
         return 0;
     }
