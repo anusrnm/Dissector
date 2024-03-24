@@ -1,0 +1,10 @@
+<?xml version="1.0" ?>
+<layout name="TEST" type="dsect">
+    <field type="D" name="Len" length="4" kind="length" for="data" partofstruc="N"/>
+    <head id="nextSiblingHead">
+        <field type="C" name="field1" length="1"/>
+    </head>
+    <struc name="data">
+        <field type="C" name="Data" length="1" />
+    </struc>
+</layout>

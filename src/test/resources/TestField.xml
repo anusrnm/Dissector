@@ -1,0 +1,11 @@
+<?xml version="1.0" ?>
+<layout name="TEST" type="dsect">
+    <field type="D" name="Len" length="4" kind="length" for="myStruc" partofstruc="N"/>
+    <struc name="myStruc">
+        <field type="C" name="field1" kind="filler" />
+    </struc>
+    <field type="D" name="field2" length="1"/>
+    <struc name="anotherStruc">
+        <field type="C" name="field1" kind="filler" />
+    </struc>
+</layout>

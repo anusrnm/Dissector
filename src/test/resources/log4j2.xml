@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration>
+    <Appenders>
+        <Console name="CONSOLE" target="SYSTEM_OUT">
+            <PatternLayout pattern="%-5r %-5p [%c{1}] (%M:%L) %m%n"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+<!--        <Logger name="com.rajen.utils" level="debug">-->
+<!--            <AppenderRef ref="CONSOLE"/>-->
+<!--        </Logger>-->
+        <Root level="debug">
+            <AppenderRef ref="CONSOLE"/>
+        </Root>
+    </Loggers>
+</Configuration>
