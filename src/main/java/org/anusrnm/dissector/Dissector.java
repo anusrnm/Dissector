@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
+import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
@@ -21,32 +22,47 @@ import org.xml.sax.SAXException;
 class Dissector {
 
     private static final String LS = System.lineSeparator();
-    private static final SimpleDateFormat yyyyMMdd = new SimpleDateFormat("yyyy.MM.dd");
     private static final SimpleDateFormat ddMMMyyyy = new SimpleDateFormat("dd-MMM-yyyy");
     private static final SimpleDateFormat ddMMMyyyy_hhmmss = new SimpleDateFormat("dd-MMM-yyyy hh:mm:ss");
-    private static final GregorianCalendar TPF_EPOCH = new GregorianCalendar(1966, Calendar.FEBRUARY, 2);
-    private static final GregorianCalendar TOD_EPOCH = new GregorianCalendar(1900, Calendar.FEBRUARY, 1);
     private static final String TOD_ADJUST = "1.048576";
     private static final int MAX_COUNTER = 500;
+    public static final String DSECT = "dsect";
+    public static final String VERSION = "version";
+    public static final String COUNTER = "counter";
+    public static final String STRUC = "struc";
+    public static final String GROUP = "group";
+    public static final String LENGTH = "length";
+    public static final String FILLER = "filler";
+    public static final String START = "start";
+    public static final String END = "end";
+    public static final String PARSD = "parsd";
+    public static final String TOD = "tod";
+    public static final String ZTOD = "ztod";
+    public static final String MINS = "mins";
+    public static final String HHMM = "hhmm";
     private StringBuilder res;
     private String inputStr;
-    private final Document doc;
+    private Document doc;
     private final String layoutType;
     private long displ = 0;
     private long fillerLen = -1;
     private boolean trackLen = false;
     private long useFieldLen = 0;
-    private final String folder;
+    private final String layoutDir;
     private final String formatting = "d";
 
     Dissector(File layout) throws IOException, SAXException, ParserConfigurationException {
-        this.folder = layout.getParent();
+        layoutDir = layout.getParent();
+        doc = getDocument(layout);
+        layoutType = doc.getDocumentElement().getAttribute("type");
+    }
+
+    private Document getDocument(File layout) throws ParserConfigurationException, SAXException, IOException {
         DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
         dbFactory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
         dbFactory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
         DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
-        this.doc = dBuilder.parse(layout);
-        this.layoutType = doc.getDocumentElement().getAttribute("type");
+         return dBuilder.parse(layout);
     }
 
     public static String getInType(String fieldValue, String fieldType) {
@@ -55,7 +71,7 @@ class Dissector {
             throw new IllegalArgumentException("empty input");
         }
         switch (fieldType.toLowerCase()) {
-            case "parsd":
+            case PARSD:
                 if (fieldValue.length() < 4) {
                     throw new IllegalArgumentException("minimum 4 hex chars are required");
                 }
@@ -67,7 +83,7 @@ class Dissector {
                     fieldValueInType = ddMMMyyyy.format(newDate);
                 }
                 break;
-            case "tod":
+            case TOD:
                 if  (fieldValue.length() < 8) {
                     throw new IllegalArgumentException("minimum 8 hex chars are required");
                 }
@@ -83,7 +99,7 @@ class Dissector {
                     fieldValueInType = ddMMMyyyy_hhmmss.format(newDate);
                 }
                 break;
-            case "ztod":
+            case ZTOD:
                 BigInteger ztod = new BigInteger(fieldValue.substring(0, 8), 16);
                 if (ztod.intValue() != 0) {
                     Calendar cal = new GregorianCalendar(1966, Calendar.JANUARY, 3);
@@ -92,11 +108,11 @@ class Dissector {
                     fieldValueInType = ddMMMyyyy_hhmmss.format(newDate);
                 }
                 break;
-            case "mins":
+            case MINS:
                 int mins = Integer.parseInt(fieldValue, 16);
                 fieldValueInType = String.format("%02d:%02d", mins / 60, mins % 60);
                 break;
-            case "hhmm":
+            case HHMM:
                 if  (fieldValue.length() < 4) {
                     throw new IllegalArgumentException("minimum 4 hex chars are required");
                 }
@@ -127,34 +143,19 @@ class Dissector {
 
     public static Element getMatchingElement(Element parent, String childName, String attrName,
                                              String attrValue, String compareType) {
-        Element matchingElement = null;
         List<Element> nl = getChildElementsByTagName(parent, childName);
-        switch (compareType) {
-            case "start":
-                for (Element gel : nl) {
-                    if (gel.getAttribute(attrName).startsWith(attrValue)) {
-                        matchingElement = gel;
-                        break;
+        return nl.stream()
+                .filter(gel -> {
+                    if (compareType.equalsIgnoreCase(START)) {
+                        return attrValue.toLowerCase().startsWith(gel.getAttribute(attrName).toLowerCase());
+                    } else if (compareType.equalsIgnoreCase(END)) {
+                        return attrValue.toLowerCase().endsWith(gel.getAttribute(attrName).toLowerCase());
+                    } else {
+                        return attrValue.equalsIgnoreCase(gel.getAttribute(attrName));
                     }
-                }
-                break;
-            case "end":
-                for (Element gel : nl) {
-                    if (gel.getAttribute(attrName).endsWith(attrValue)) {
-                        matchingElement = gel;
-                        break;
-                    }
-                }
-                break;
-            default:
-                for (Element gel : nl) {
-                    if (gel.getAttribute(attrName).equals(attrValue)) {
-                        matchingElement = gel;
-                        break;
-                    }
-                }
-        }
-        return matchingElement;
+                })
+                .findFirst()
+                .orElse(null);
     }
 
     public static List<Element> getChildElementsByTagName(Element element, String tagName) {
@@ -197,23 +198,22 @@ class Dissector {
                 break;
             }
         }
-        if (next != null && !next.getNodeName().equals("head")) {
-            next = null;
-        }
         return (Element) next;
     }
 
     private String getFieldValue(long fieldLength) {
-        return getFieldValue(fieldLength, false);
+        return getFieldValue(fieldLength, true);
     }
 
     private String getFieldValue(long fieldLength, boolean clearInput) {
-        String value = "";
-        if (layoutType.equalsIgnoreCase("dsect")) {
+        String value;
+        if (layoutType.equalsIgnoreCase(DSECT)) {
             fieldLength = fieldLength * 2;
         }
         if (fieldLength > 0 && inputStr.length() >= fieldLength) {
             value = inputStr.substring(0, (int) fieldLength);
+            if(clearInput)
+                inputStr = inputStr.substring((int)fieldLength);
         } else {
             value = inputStr;
             if (clearInput)
@@ -243,37 +243,12 @@ class Dissector {
 
     public static List<String> getBitValue(int i, Map<String, String> fieldValuesMap) {
         List<String> values = new ArrayList<>();
-        String val = fieldValuesMap.get("80");
-        if (isBitSet(i,7) && val != null) {
-            values.add(val);
-        }
-        val = fieldValuesMap.get("40");
-        if (isBitSet(i,6) && val != null) {
-            values.add(val);
-        }
-        val = fieldValuesMap.get("20");
-        if (isBitSet(i,5) && val != null) {
-            values.add(val);
-        }
-        val = fieldValuesMap.get("10");
-        if (isBitSet(i,4) && val != null) {
-            values.add(val);
-        }
-        val = fieldValuesMap.get("08");
-        if (isBitSet(i,3) && val != null) {
-            values.add(val);
-        }
-        val = fieldValuesMap.get("04");
-        if (isBitSet(i,2) && val != null) {
-            values.add(val);
-        }
-        val = fieldValuesMap.get("02");
-        if (isBitSet(i,1) && val != null) {
-            values.add(val);
-        }
-        val = fieldValuesMap.get("01");
-        if (isBitSet(i,0) && val != null) {
-            values.add(val);
+        for(int j = 0; j < 8; j++) {
+            String key = String.format("%02x", 1L << j);
+            String val = fieldValuesMap.get(key);
+            if (isBitSet(i,j) && val != null) {
+                values.add(val);
+            }
         }
         return values;
     }
@@ -296,22 +271,22 @@ class Dissector {
             String fieldType = field.getAttribute("type");
             String fieldKind = field.getAttribute("kind");
             String fieldForAttr = field.getAttribute("for");
-            String fieldLength = field.getAttribute("length");
+            String fieldLength = field.getAttribute(LENGTH);
             String fieldValuesAttr = field.getAttribute("values");
             String fieldMinusAttr = field.getAttribute("minus");
-            String fieldSearchTypeAttr = field.getAttribute("searchtype");
+//            String fieldSearchTypeAttr = field.getAttribute("searchtype");
             String fieldValue;
             var fieldMinusVal = 0;
             if (!fieldMinusAttr.isEmpty()) {
                 try {
                     fieldMinusVal = Integer.parseInt(fieldMinusAttr);
                 }catch (Exception any) {
-                    res.append(String.format("\nInvalid attribute (minus) for %s \n", fieldName ));
+                    res.append(String.format("%nInvalid attribute (minus) for %s %n", fieldName ));
                     return -10;
                 }
             }
             int fieldLengthInt = 0;
-            if (!fieldKind.equalsIgnoreCase("filler")) {
+            if (!fieldKind.equalsIgnoreCase(FILLER)) {
                 try {
                     fieldLengthInt = Integer.parseInt(fieldLength);
                 } catch (NumberFormatException nfe) {
@@ -329,322 +304,370 @@ class Dissector {
                 trackLen = true;
                 fillerLen = 0;
                 try {
-                    useFieldLen = Integer.parseInt(getInType(getFieldValue(fieldLengthInt, true), "D"));
+                    useFieldLen = Integer.parseInt(getInType(getFieldValue(fieldLengthInt, false), "D"));
                 } catch (Exception inh) {
                     res.append(String.format("%sError: Invalid Hex. %s%s", LS, inh.getMessage(), LS));
                     return -2;
                 }
             }
-            if (trackLen & !fieldLength.isEmpty()) {
+            if (trackLen && !fieldLength.isEmpty()) {
                 fillerLen += fieldLengthInt;
             }
             StringBuilder outputString = new StringBuilder();
             outputString.append(String.format("%35s : ", temp));
             switch (fieldKind){
-                case "counter":  res.append(outputString);
-                    String repeatCount = getFieldValue(fieldLengthInt);
-                    var headElement = getNextSiblingHeadElement(field);
-                    var currentStruc = getMatchingElement(parent, "struc", "name", fieldForAttr,"start");
-                    if (currentStruc == null) {
-                        res.append(String.format("'%s'\nError: '%s' Struc layout not found.\n", repeatCount, fieldForAttr));
-                        return -3;
-                    }
-                    var iRepeatCount = 0;
-                    var radix = layoutType.equalsIgnoreCase("dsect")? 16: 10;
-                    try {
-                        iRepeatCount = Integer.parseInt(repeatCount, radix);
-                    }catch (NumberFormatException nfe) {
-                        res.append(String.format("Invalid counter %s\n", repeatCount));
-                        return -2;
-                    }
-                    if (iRepeatCount > MAX_COUNTER) {
-                        res.append(String.format("Warning: Counter value %d ('%s') too high (max=%d)\n",
-                                iRepeatCount, repeatCount, MAX_COUNTER));
-                        return -2;
-                    }
-                    res.append(String.format("'%s\n", repeatCount));
-                    if (headElement != null) {
-                        int ret = parseWith(headElement);
-                        if (ret != 0) {
-                            return -1;
-                        }
-                    }
-                    for (int i=0; i< iRepeatCount; i++) {
-                        res.append(String.format("%s %d of %d :\n", fieldForAttr, i+1, iRepeatCount));
-                        int ret = parseWith(currentStruc);
-                        if (ret != 0) {
-                            return -1;
-                        }
-                    }
+                case COUNTER:
+                    Integer x4 = handleCounter(parent, field, outputString, fieldLengthInt, fieldForAttr);
+                    if (x4 != null) return x4;
                     break;
-                case "version":
-                    res.append(outputString);
-                    String versionNum = getFieldValue(fieldLengthInt);
-                    if (layoutType.equalsIgnoreCase("dsect")) {
-                        String fit;
-                        try {
-                            fit = getInType(versionNum, fieldType);
-                        } catch (Exception any) {
-                            res.append(String.format("Invalid hex %s", any.getMessage()));
-                            return -10;
-                        }
-                        res.append(String.format("%s = '%s'\n", versionNum, fit));
-                    }
-                    Element currentVersionElement = getMatchingElement(parent, "version", "name", versionNum, "start");
-                    headElement = getNextSiblingHeadElement(field);
-                    if (headElement != null ) {
-                        int ret = parseWith(headElement);
-                        if (ret != 0) {
-                            return -1;
-                        }
-                    }
-                    if (currentVersionElement == null) {
-                        res.append(String.format("Error: '%s' Version layout not found\n", versionNum));
-                        return -4;
-                    }
-                    String includeAttr = currentVersionElement.getAttribute("include");
-                    if (includeAttr != null) {
-                        String[] includeVers = includeAttr.split(",");
-                        res.append(String.format("Includes %d version(s): %s\n", includeVers.length, includeAttr));
-                        int ret = 0;
-                        for(String v: includeVers) {
-                            if(!v.isEmpty()) {
-                                Element includedVersionElement = getMatchingElement(parent, "version", "name", v, "start");
-                                if (includedVersionElement != null) {
-                                    ret = parseWith(includedVersionElement);
-                                } else {
-                                    res.append(String.format("Error: %s version layout not found\n", v));
-                                    ret = -1;
-                                }
-                            }
-                            if (ret != 0) {
-                                break;
-                            }
-                        }
-                        if (ret != 0) {
-                            return -1;
-                        }
-                    }
-                    if (parseWith(currentVersionElement) != 0) {
-                        return -1;
-                    }
+                case VERSION:
+                    Integer x3 = handleVersion(parent, field, outputString, fieldLengthInt, fieldType);
+                    if (x3 != null) return x3;
                     break;
-                case "group":
-                    res.append(outputString);
-                    String groupName = getFieldValue(fieldLengthInt);
-                    if (layoutType.equalsIgnoreCase("dsect")) {
-                        String fit;
-                        try {
-                            fit = getInType(groupName, fieldType);
-                        }catch (Exception any) {
-                            res.append(String.format("\nError: Invalid hex %s\n", any.getMessage()));
-                            return -10;
-                        }
-                        res.append(String.format("%s = '%s'", groupName, fit));
-                    } else {
-                        res.append(groupName);
-                    }
-                    Element currentGroupElement = getMatchingElement(parent, "group", "name", groupName, "start");
-                    if (currentGroupElement == null) {
-                        currentGroupElement = getMatchingElement(parent, "group", "name", "", "start" ); //Get Default group with name= ""
-                    }
-                    if (currentGroupElement == null) {
-                        res.append(String.format("\nError: '%s' Group layout not found\n", groupName));
-                        return -5;
-                    }
-                    String aliasName = currentGroupElement.getAttribute("alias");
-                    if (aliasName.isEmpty()) {
-                        res.append(String.format(" (%s)", aliasName)); //Show Alias name, if any
-                    }
-                    res.append("\n");
-                    headElement = getNextSiblingHeadElement(field);
-                    if (headElement != null) {
-                        if (parseWith(headElement) != 0) {
-                            return -1;
-                        }
-                    }
-                    if (parseWith(currentGroupElement) != 0) {
-                        return -1;
-                    }
+                case GROUP:
+                    Integer x2 = handleGroup(parent, field, outputString, fieldLengthInt, fieldType);
+                    if (x2 != null) return x2;
                     break;
-                case "length":
-                    res.append(outputString);
-                    fieldValue = getFieldValue(fieldLengthInt);
-                    int intFieldValue = 0;
-                    if (layoutType.equalsIgnoreCase("dsect")) {
-                        String fit;
-                        try {
-                            fit = getInType(fieldValue, fieldType);
-                        } catch (Exception any) {
-                            res.append(String.format("\nError: Invalid hex. %s\n", any.getMessage()));
-                            return -10;
-                        }
-                        res.append(String.format("%s = '%s'\n", fieldValue, fit));
-                        if (fieldValue.length()/2 != fieldLengthInt) {
-                            res.append(String.format("Warning: %s value not lengthy enough (Current length: %d)\n", fieldName, fieldValue.length()/2));
-                        }
-                    } else {
-                        try {
-                            intFieldValue = Integer.parseInt(fieldValue, 16);
-                        } catch(NumberFormatException nfe) {
-                            res.append(String.format("\nError: Invalid hex. %s\n", nfe.getMessage()));
-                            return -10;
-                        }
-                        String strucName = fieldForAttr;
-                        String partOfStruc = field.getAttribute("partofstruc");
-                        if (partOfStruc.equalsIgnoreCase("y")) {
-                            intFieldValue -= fieldLengthInt;
-                        }
-                        intFieldValue -= fieldMinusVal;
-                        if (intFieldValue > 0) {
-                            headElement = getNextSiblingHeadElement(field);
-                            if (headElement != null) { // Any Head element immediately to this field is used to parse
-                                if (parseWith(headElement) != 0) {
-                                    return -1;
-                                }
-                            }
-                            String strucValue = getFieldValue(intFieldValue);
-                            String restOfInput = getFieldValue(-1);
-                            currentStruc = getMatchingElement(parent, "struc", "name", strucName, "start");
-                            if (currentStruc == null) {
-                                res.append(String.format("Error: '%s' Struc layout not found.\n'%s'\n", strucName, strucValue));
-                                return -9;
-                            }
-                            res.append(String.format("---%s Size=%d\n", strucName, intFieldValue));
-                            inputStr = strucValue;
-                            int ret = 0;
-                            while(!inputStr.isEmpty()) {
-                                ret = parseWith(currentStruc);
-                                if (ret != 0) {
-                                    break;
-                                }
-                            }
-                            if (ret != 0) {
-                                return ret;
-                            }
-                            inputStr = restOfInput;
-                        }
-                    }
+                case LENGTH:
+                    Integer x1 = handleLength(parent, field, outputString, fieldLengthInt, fieldType, fieldName, fieldMinusVal, fieldForAttr);
+                    if (x1 != null) return x1;
                     break;
-                case "filler":
-                    if (useFieldLen != 0) {
-                        fillerLen = useFieldLen - fillerLen;
-                    }
-                    fieldValue = "";
-                    if (fillerLen != 0) {
-                        fieldValue = getFieldValue(fillerLen);
-                    }
-                    trackLen = false;
-                    fillerLen = -1;
-                    useFieldLen = 0;
-                    if (!fieldValue.isEmpty()) {
-                        String strucName = field.getAttribute("for");
-                        if (strucName.isEmpty()) {
-                            String opString = "";
-                            if (layoutType.equalsIgnoreCase("dsect")) {
-                                opString += String.format("%35s : ", String.format("(%d.%d) %s", displ, fieldValue.length()/2, fieldName));
-                                String fit;
-                                try {
-                                    fit = getInType(fieldValue, fieldType);
-                                } catch (Exception any){
-                                    res.append(String.format("\nInvalid data %s %s %s\n", fieldName, any.getMessage(), fieldValue));
-                                    return -10;
-                                }
-                                res.append(String.format("%s%s = '%s'\n", opString, fieldValue, fit));
-                            } else {
-                                opString += String.format("%35s: ", String.format("(%d.%d) %s", displ, fieldValue.length(), fieldName));
-                                res.append(String.format("%s'%s'\n", opString, fieldValue));
-                            }
-                        } else {
-                            Element currentStruc2 = getMatchingElement(parent, "struc", "name", strucName, "start");
-                            if (currentStruc2 == null) { //  TODO: try the name as layout file
-                                res.append(String.format("Error: '%s' Struc layout not found. %s\n", strucName, "File not found"));
-                                return -6;
-                            }
-                            res.append(String.format("---%s [Rest of the data]:\n", strucName));
-                            String restOfInput = getFieldValue(-1);
-                            inputStr = fieldValue;
-                            int ret1 = 0;
-                            while(!inputStr.isEmpty()) {
-                                ret1 = parseWith(currentStruc2);
-                                if (ret1 != 0) {
-                                    break;
-                                }
-                            }
-                            inputStr = restOfInput; //Restore
-                            if (ret1 != 0) {
-                                return ret1;
-                            }
-                        }
-                    }
+                case FILLER:
+                    Integer x = handleFiller(parent, field, fieldName, fieldType);
+                    if (x != null) return x;
                     break;
                 default:
-                    res.append(outputString);
-                    if (fieldLength.isEmpty()) {
-                        res.append("Error: Length attribute not provided\n");
-                        return -10;
-                    }
-                    fieldValue = getFieldValue(fieldLengthInt);
-                    fieldValuesAttr = field.getAttribute("values");
-                    var fieldValuesMap = convertToMap(fieldValuesAttr);
-                    var fieldValueMeaning = fieldValuesMap.get(fieldValue);
-                    if (fieldValueMeaning != null) {
-                        fieldValueMeaning = String.format(" (%s)", fieldValueMeaning);
-                    }
-                    if (fieldType.equalsIgnoreCase("B") && !fieldValuesMap.isEmpty()) {
-                        int i;
-                        try {
-                            i = Integer.parseInt(fieldValue, 16);
-                        }catch (NumberFormatException nfe) {
-                            res.append(String.format("\nInvalid data: %s\n", fieldValue));
-                            return -10;
-                        }
-                        List<String> bitValueList = getBitValue(i, fieldValuesMap);
-                        if (!bitValueList.isEmpty()) {
-                            if (bitValueList.size() > 1) {
-                                fieldValueMeaning = "\n" + String.format("%-35s", String.join("\n", bitValueList));
-                            } else {
-                                fieldValueMeaning = String.format(" (%s)", String.join(",", bitValueList));
-                            }
-                        }
-                    }
-                    if (layoutType.equalsIgnoreCase("dsect")) {
-                        String fit;
-                        try {
-                            fit = getInType(fieldValue, fieldType);
-                        } catch (Exception any) {
-                            res.append(String.format("\nInvalid data %s %s\n", any.getMessage(), fieldValue));
-                            return -10;
-                        }
-                        String formatterFit = "";
-                        if (!fit.isEmpty()) {
-                            formatterFit = String.format(" = '%s'", fit);
-                        }
-                        var fval1 = fieldValuesMap.get(fieldValue);
-                        var fval = fieldValuesMap.get(fit);
-                        if (fval1 == null && fval != null) {
-                            fieldValueMeaning = String.format(" (%s)", fval);
-                        }
-                        res.append(String.format("%s%s%s\n", fieldValue, formatterFit, fieldValueMeaning));
-
-                        if (fieldValue.length() != 2* fieldLengthInt) {
-                            res.append(String.format("Warning: %s value not lengthy enough (Current length: %d)\n", fieldName, fieldValue.length()/2));
-                            return -11;
-                        }
-                    } else {
-                        if (fieldValueMeaning != null) {
-                            res.append(String.format("'%s' (%s)\n", fieldValue, fieldValueMeaning));
-                        } else {
-                            res.append(String.format("'%s'\n", fieldValue));
-                        }
-                        if (fieldValue.length() != fieldLengthInt) {
-                            res.append(String.format("Warning: %s value not lengthy enough (Current Length: %d\n", fieldName, fieldValue.length()));
-                            return -11;
-                        }
-                    }
+                    Integer x5 = handleField(outputString, fieldLength, fieldLengthInt, fieldValuesAttr, fieldType, fieldName);
+                    if (x5 != null) return x5;
             }
         }
         return 0;
+    }
+
+    private Integer handleField(StringBuilder outputString, String fieldLength, int fieldLengthInt, String fieldValuesAttr, String fieldType, String fieldName) {
+        String fieldValue;
+        res.append(outputString);
+        if (fieldLength.isEmpty()) {
+            res.append("Error: Length attribute not provided\n");
+            return -10;
+        }
+        fieldValue = getFieldValue(fieldLengthInt);
+        var fieldValuesMap = convertToMap(fieldValuesAttr);
+        var fieldValueMeaning = fieldValuesMap.get(fieldValue);
+        if (fieldValueMeaning != null) {
+            fieldValueMeaning = String.format(" (%s)", fieldValueMeaning);
+        }
+        if (fieldType.equalsIgnoreCase("B") && !fieldValuesMap.isEmpty()) {
+            int i;
+            try {
+                i = Integer.parseInt(fieldValue, 16);
+            }catch (NumberFormatException nfe) {
+                res.append(String.format("%nInvalid data: %s%n", fieldValue));
+                return -10;
+            }
+            List<String> bitValueList = getBitValue(i, fieldValuesMap);
+            if (!bitValueList.isEmpty()) {
+                if (bitValueList.size() > 1) {
+                    fieldValueMeaning = String.format("%n%-35s", String.join("\n", bitValueList));
+                } else {
+                    fieldValueMeaning = String.format(" (%s)", String.join(",", bitValueList));
+                }
+            }
+        }
+        if (layoutType.equalsIgnoreCase(DSECT)) {
+            String fit;
+            try {
+                fit = getInType(fieldValue, fieldType);
+            } catch (Exception any) {
+                res.append(String.format("%nInvalid data %s %s%n", any.getMessage(), fieldValue));
+                return -10;
+            }
+            String formatterFit = "";
+            if (!fit.isEmpty()) {
+                formatterFit = String.format(" = '%s'", fit);
+            }
+            var fval1 = fieldValuesMap.get(fieldValue);
+            var fval = fieldValuesMap.get(fit);
+            if (fval1 == null && fval != null) {
+                fieldValueMeaning = String.format(" (%s)", fval);
+            }
+            res.append(String.format("%s%s%s%n", fieldValue, formatterFit, fieldValueMeaning ==null?"":fieldValueMeaning));
+
+            if (fieldValue.length() != 2* fieldLengthInt) {
+                res.append(String.format("Warning: %s value not lengthy enough (Current length: %d)%n", fieldName, fieldValue.length()/2));
+                return -11;
+            }
+        } else {
+            if (fieldValueMeaning != null) {
+                res.append(String.format("'%s' (%s)%n", fieldValue, fieldValueMeaning));
+            } else {
+                res.append(String.format("'%s'%n", fieldValue));
+            }
+            if (fieldValue.length() != fieldLengthInt) {
+                res.append(String.format("Warning: %s value not lengthy enough (Current Length: %d%n", fieldName, fieldValue.length()));
+                return -11;
+            }
+        }
+        return null;
+    }
+
+    private Integer handleCounter(Element parent, Element field, StringBuilder outputString, int fieldLengthInt, String fieldForAttr) {
+        res.append(outputString);
+        String repeatCount = getFieldValue(fieldLengthInt);
+        var headElement = getNextSiblingHeadElement(field);
+        var currentStruc = getMatchingElement(parent, STRUC, "name", fieldForAttr, START);
+        if (currentStruc == null) {
+            res.append(String.format("'%s'%nError: '%s' Struc layout not found.%n", repeatCount, fieldForAttr));
+            return -3;
+        }
+        var iRepeatCount = 0;
+        var radix = layoutType.equalsIgnoreCase(DSECT)? 16: 10;
+        try {
+            iRepeatCount = Integer.parseInt(repeatCount, radix);
+        }catch (NumberFormatException nfe) {
+            res.append(String.format("Invalid counter %s%n", repeatCount));
+            return -2;
+        }
+        if (iRepeatCount > MAX_COUNTER) {
+            res.append(String.format("Warning: Counter value %d ('%s') too high (max=%d)%n",
+                    iRepeatCount, repeatCount, MAX_COUNTER));
+            return -2;
+        }
+        res.append(String.format("'%s%n", repeatCount));
+        if (headElement != null) {
+            int ret = parseWith(headElement);
+            if (ret != 0) {
+                return -1;
+            }
+        }
+        for (int i=0; i< iRepeatCount; i++) {
+            res.append(String.format("%s %d of %d :%n", fieldForAttr, i+1, iRepeatCount));
+            int ret = parseWith(currentStruc);
+            if (ret != 0) {
+                return -1;
+            }
+        }
+        return null;
+    }
+
+    private Integer handleVersion(Element parent, Element field, StringBuilder outputString, int fieldLengthInt, String fieldType) {
+        Element headElement;
+        res.append(outputString);
+        String versionNum = getFieldValue(fieldLengthInt);
+        if (layoutType.equalsIgnoreCase(DSECT)) {
+            String fit;
+            try {
+                fit = getInType(versionNum, fieldType);
+            } catch (Exception any) {
+                res.append(String.format("Invalid hex %s", any.getMessage()));
+                return -10;
+            }
+            res.append(String.format("%s = '%s'%n", versionNum, fit));
+        }
+        Element currentVersionElement = getMatchingElement(parent, VERSION, "name", versionNum, START);
+        headElement = getNextSiblingHeadElement(field);
+        if (headElement != null ) {
+            int ret = parseWith(headElement);
+            if (ret != 0) {
+                return -1;
+            }
+        }
+        if (currentVersionElement == null) {
+            res.append(String.format("Error: '%s' Version layout not found%n", versionNum));
+            return -4;
+        }
+        String includeAttr = currentVersionElement.getAttribute("include");
+        if (!includeAttr.isEmpty()) {
+            String[] includeVers = includeAttr.split(",");
+            res.append(String.format("Includes %d version(s): %s%n", includeVers.length, includeAttr));
+            int ret = 0;
+            for(String v: includeVers) {
+                if(!v.isEmpty()) {
+                    Element includedVersionElement = getMatchingElement(parent, VERSION, "name", v, START);
+                    if (includedVersionElement != null) {
+                        ret = parseWith(includedVersionElement);
+                    } else {
+                        res.append(String.format("Error: %s version layout not found%n", v));
+                        ret = -1;
+                    }
+                }
+                if (ret != 0) {
+                    break;
+                }
+            }
+            if (ret != 0) {
+                return -1;
+            }
+        }
+        if (parseWith(currentVersionElement) != 0) {
+            return -1;
+        }
+        return null;
+    }
+
+    private Integer handleGroup(Element parent, Element field, StringBuilder outputString, int fieldLengthInt, String fieldType) {
+        Element headElement;
+        res.append(outputString);
+        String groupName = getFieldValue(fieldLengthInt);
+        if (layoutType.equalsIgnoreCase(DSECT)) {
+            String fit;
+            try {
+                fit = getInType(groupName, fieldType);
+            }catch (Exception any) {
+                res.append(String.format("%nError: Invalid hex %s%n", any.getMessage()));
+                return -10;
+            }
+            res.append(String.format("%s = '%s'", groupName, fit));
+        } else {
+            res.append(groupName);
+        }
+        Element currentGroupElement = getMatchingElement(parent, GROUP, "name", groupName, START);
+        if (currentGroupElement == null) {
+            currentGroupElement = getMatchingElement(parent, GROUP, "name", "", START); //Get Default group with name= ""
+        }
+        if (currentGroupElement == null) {
+            res.append(String.format("%nError: '%s' Group layout not found%n", groupName));
+            return -5;
+        }
+        String aliasName = currentGroupElement.getAttribute("alias");
+        if (!aliasName.isEmpty()) {
+            res.append(String.format(" (%s)", aliasName)); //Show Alias name, if any
+        }
+        res.append("\n");
+        headElement = getNextSiblingHeadElement(field);
+        if (headElement != null && (parseWith(headElement) != 0)) {
+            return -1;
+        }
+        if (parseWith(currentGroupElement) != 0) {
+            return -1;
+        }
+        return null;
+    }
+
+    private Integer handleLength(Element parent, Element field, StringBuilder outputString, int fieldLengthInt, String fieldType, String fieldName, int fieldMinusVal, String fieldForAttr) {
+        Element headElement;
+        String fieldValue;
+        Element currentStruc;
+        res.append(outputString);
+        fieldValue = getFieldValue(fieldLengthInt);
+        int intFieldValue = 0;
+        if (layoutType.equalsIgnoreCase(DSECT)) {
+            try {
+                intFieldValue = Integer.parseInt(fieldValue, 16);
+            } catch (NumberFormatException nfe) {
+                res.append(String.format("%nError: Invalid hex. %s%n", nfe.getMessage()));
+                return -10;
+            }
+            String fit;
+            try {
+                fit = getInType(fieldValue, fieldType);
+            } catch (Exception any) {
+                res.append(String.format("%nError: Invalid hex. %s%n", any.getMessage()));
+                return -10;
+            }
+            res.append(String.format("%s = '%s'%n", fieldValue, fit));
+            if (fieldValue.length()/2 != fieldLengthInt) {
+                res.append(String.format("Warning: %s value not lengthy enough (Current length: %d)%n", fieldName, fieldValue.length()/2));
+            }
+        } else {
+            try {
+                intFieldValue = Integer.parseInt(fieldValue, 16);
+            } catch (NumberFormatException nfe) {
+                res.append(String.format("%nError: Invalid hex. %s%n", nfe.getMessage()));
+                return -10;
+            }
+        }
+        String partOfStruc = field.getAttribute("partofstruc");
+        if (partOfStruc.equalsIgnoreCase("y")) {
+            intFieldValue -= fieldLengthInt;
+        }
+        intFieldValue -= fieldMinusVal;
+        if (intFieldValue > 0) {
+            headElement = getNextSiblingHeadElement(field);
+            if (headElement != null && (parseWith(headElement) != 0)) {
+                return -1;
+            }
+            String strucValue = getFieldValue(intFieldValue);
+            String restOfInput = getFieldValue(-1);
+            currentStruc = getMatchingElement(parent, STRUC, "name", fieldForAttr, START);
+            if (currentStruc == null) {
+                res.append(String.format("Error: '%s' Struc layout not found.%n'%s'%n", fieldForAttr, strucValue));
+                return -9;
+            }
+            res.append(String.format("---%s Size=%d%n", fieldForAttr, intFieldValue));
+            inputStr = strucValue;
+            int ret = 0;
+            while(!inputStr.isEmpty()) {
+                ret = parseWith(currentStruc);
+                if (ret != 0) {
+                    break;
+                }
+            }
+            if (ret != 0) {
+                return ret;
+            }
+            inputStr = restOfInput;
+        }
+        return null;
+    }
+
+    private Integer handleFiller(Element parent, Element field, String fieldName, String fieldType) {
+        String fieldValue;
+        if (useFieldLen != 0) {
+            fillerLen = useFieldLen - fillerLen;
+        }
+        fieldValue = "";
+        if (fillerLen != 0) {
+            fieldValue = getFieldValue(fillerLen);
+        }
+        trackLen = false;
+        fillerLen = -1;
+        useFieldLen = 0;
+        if (!fieldValue.isEmpty()) {
+            String strucName = field.getAttribute("for");
+            if (strucName.isEmpty()) {
+                String opString = "";
+                if (layoutType.equalsIgnoreCase(DSECT)) {
+                    opString += String.format("%35s : ", String.format("(%d.%d) %s", displ, fieldValue.length()/2, fieldName));
+                    String fit;
+                    try {
+                        fit = getInType(fieldValue, fieldType);
+                    } catch (Exception any){
+                        res.append(String.format("%nInvalid data %s %s %s%n", fieldName, any.getMessage(), fieldValue));
+                        return -10;
+                    }
+                    res.append(String.format("%s%s = '%s'%n", opString, fieldValue, fit));
+                } else {
+                    opString += String.format("%35s: ", String.format("(%d.%d) %s", displ, fieldValue.length(), fieldName));
+                    res.append(String.format("%s'%s'%n", opString, fieldValue));
+                }
+            } else {
+                Element currentStruc2 = getMatchingElement(parent, STRUC, "name", strucName, START);
+                if (currentStruc2 == null) {
+                    try {
+                        currentStruc2 = getDocument(Path.of(layoutDir, strucName).toFile()).getDocumentElement();
+                    } catch (Exception any) {
+                        res.append(String.format("Error: '%s' Struc layout not found. %s%n", strucName, "File not found"));
+                        return -6;
+                    }
+                }
+                res.append(String.format("---%s [Rest of the data]:%n", strucName));
+                String restOfInput = getFieldValue(-1);
+                inputStr = fieldValue;
+                int ret1 = 0;
+                while(!inputStr.isEmpty()) {
+                    ret1 = parseWith(currentStruc2);
+                    if (ret1 != 0) {
+                        break;
+                    }
+                }
+                inputStr = restOfInput; //Restore
+                if (ret1 != 0) {
+                    return ret1;
+                }
+            }
+        }
+        return null;
     }
 
 }
