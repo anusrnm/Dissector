@@ -36,7 +36,6 @@ class Dissector {
     public static final String ZTOD = "ztod";
     public static final String MINS = "mins";
     public static final String HHMM = "hhmm";
-    private static final String LS = System.lineSeparator();
     private static final String TOD_ADJUST = "1.048576";
     private static final int MAX_COUNTER = 500;
     private final Document doc;
@@ -300,7 +299,7 @@ class Dissector {
     public static String getSafeString(byte[] data) {
         StringBuilder result = new StringBuilder();
         for (byte currentByte : data) {
-            result.append(Character.isISOControl((char) currentByte) ? '.' : (char) currentByte);
+            result.append((currentByte >= 32 && currentByte <= 126) ? (char) currentByte : '.');
         }
         return result.toString();
     }
@@ -355,7 +354,7 @@ class Dissector {
         List<Element> fl = getChildElementsByTagName(parent, "field");
         if (fl.isEmpty()) {
             res.append(
-                    String.format("Warning: No fields found in the layout to parse %s%s%s", LS, getFieldValue(-1), LS));
+                    String.format("Warning: No fields found in the layout to parse %n%s%n", getFieldValue(-1)));
         }
         for (Element field : fl) {
             String fieldName = field.getAttribute("name");
@@ -379,8 +378,7 @@ class Dissector {
                 try {
                     fieldLengthInt = Integer.parseInt(fieldLength);
                 } catch (NumberFormatException nfe) {
-                    res.append(String.format("%sError: Invalid length attribute for %s%s",
-                            LS, fieldName, LS));
+                    res.append(String.format("%nError: Invalid length attribute for %s%n", fieldName));
                     return -10;
                 }
             }
@@ -402,7 +400,7 @@ class Dissector {
                 try {
                     useFieldLen = Integer.parseInt(getInType(getFieldValue(fieldLengthInt, false), "D"));
                 } catch (Exception inh) {
-                    res.append(String.format("%sError: Invalid Hex. %s%s", LS, inh.getMessage(), LS));
+                    res.append(String.format("%nError: Invalid Hex. %s%n", inh.getMessage()));
                     return -2;
                 }
             }
@@ -483,7 +481,7 @@ class Dissector {
                 formatterFit = String.format(" = '%s'", fit);
             }
             if (fieldValue.length() > 32) {
-                res.append(LS).append(getHexDump(fieldValue)).append(LS);
+                res.append(String.format("%n%s%n", getHexDump(fieldValue)));
             } else {
                 var fval1 = fieldValuesMap.get(fieldValue);
                 var fval = fieldValuesMap.get(fit);
@@ -729,7 +727,7 @@ class Dissector {
                 if (layoutType.equalsIgnoreCase(DSECT)) {
                     opString += String.format("%35s : ", String.format("(%d.%d) %s", displ, fieldValue.length() / 2, fieldName));
                     if (fieldValue.length() > 32) {
-                        res.append(opString).append(LS).append(getHexDump(fieldValue)).append(LS);
+                        res.append(String.format("%s%n%s%n", opString, getHexDump(fieldValue)));
                     } else {
                         String fit;
                         try {

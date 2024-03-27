@@ -19,7 +19,8 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.*;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 
 public class DissectorTest {
     private static final Logger log = LoggerFactory.getLogger(DissectorTest.class);
@@ -35,8 +36,8 @@ public class DissectorTest {
         String expected = Files.readString(resultFile.toPath());
         Dissector dissector = new Dissector(layoutFile, "d");
         String actual = dissector.parseWith(hexString);
-        log.debug("{}",actual);
-        assertEquals(expected,actual);
+        log.debug("{}", actual);
+        assertEquals(expected, actual);
     }
 
     @Ignore
@@ -51,8 +52,8 @@ public class DissectorTest {
                                          """;
         Dissector dissector = new Dissector(layoutFile, "d");
         String actual = dissector.parseWith(hexString);
-        log.debug("{}",actual);
-        assertEquals(expected,actual);
+        log.debug("{}", actual);
+        assertEquals(expected, actual);
     }
 
     @Test
@@ -144,24 +145,24 @@ public class DissectorTest {
         ZoneId currentZone = ZoneId.systemDefault();
         System.out.println("CurrentZone: " + currentZone);
 
-        Instant timeStamp= Instant.now();
+        Instant timeStamp = Instant.now();
         System.out.println("Machine Time Now:" + timeStamp);
 
         //timeStamp in zone - "America/Chicago"
-        ZonedDateTime CSTZone= timeStamp.atZone(ZoneId.of("America/Chicago"));
-        System.out.println("In Chicago(America) Time Zone:"+ CSTZone);
+        ZonedDateTime CSTZone = timeStamp.atZone(ZoneId.of("America/Chicago"));
+        System.out.println("In Chicago(America) Time Zone:" + CSTZone);
 
         //timeStamp in zone - "GMT+01:00"
-        ZonedDateTime timestampAtGMTPlus1= timeStamp.atZone(ZoneId.of("GMT+01:00"));
-        System.out.println("In 'GMT+01:00' Time Zone:"+ timestampAtGMTPlus1);
+        ZonedDateTime timestampAtGMTPlus1 = timeStamp.atZone(ZoneId.of("GMT+01:00"));
+        System.out.println("In 'GMT+01:00' Time Zone:" + timestampAtGMTPlus1);
 
         //Adding zone to time
-        LocalDateTime localDateTime= LocalDateTime.of(2016, 11, 28, 9, 30);
-        System.out.println("LocalDateTime is:"+ localDateTime);
+        LocalDateTime localDateTime = LocalDateTime.of(2016, 11, 28, 9, 30);
+        System.out.println("LocalDateTime is:" + localDateTime);
 
         //Adding "America/Los_Angeles" as the Time Zone to localDateTime
-        ZonedDateTime zonedDateTime= localDateTime.atZone(ZoneId.of("America/Chicago"));
-        System.out.println("In Chicago(America) Time Zone:"+ zonedDateTime);
+        ZonedDateTime zonedDateTime = localDateTime.atZone(ZoneId.of("America/Chicago"));
+        System.out.println("In Chicago(America) Time Zone:" + zonedDateTime);
     }
 
     @Test
