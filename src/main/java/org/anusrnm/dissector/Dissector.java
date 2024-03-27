@@ -1,11 +1,18 @@
 package org.anusrnm.dissector;
 
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
+
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
 import java.io.File;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
@@ -13,19 +20,8 @@ import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.Node;
-import org.w3c.dom.NodeList;
-import org.xml.sax.SAXException;
-
 class Dissector {
 
-    private static final String LS = System.lineSeparator();
-    private static final SimpleDateFormat ddMMMyyyy = new SimpleDateFormat("dd-MMM-yyyy");
-    private static final SimpleDateFormat ddMMMyyyy_hhmmss = new SimpleDateFormat("dd-MMM-yyyy hh:mm:ss");
-    private static final String TOD_ADJUST = "1.048576";
-    private static final int MAX_COUNTER = 500;
     public static final String DSECT = "dsect";
     public static final String VERSION = "version";
     public static final String COUNTER = "counter";
@@ -40,86 +36,52 @@ class Dissector {
     public static final String ZTOD = "ztod";
     public static final String MINS = "mins";
     public static final String HHMM = "hhmm";
+    private static final String LS = System.lineSeparator();
+    private static final String TOD_ADJUST = "1.048576";
+    private static final int MAX_COUNTER = 500;
+    private final Document doc;
+    private final String layoutType;
+    private final String layoutDir;
+    private final String formatting;
     private StringBuilder res;
     private String inputStr;
-    private Document doc;
-    private final String layoutType;
     private long displ = 0;
     private long fillerLen = -1;
     private boolean trackLen = false;
     private long useFieldLen = 0;
-    private final String layoutDir;
-    private final String formatting = "d";
 
     Dissector(File layout) throws IOException, SAXException, ParserConfigurationException {
+        this(layout, "");
+    }
+
+    Dissector(File layout, String formatting) throws IOException, SAXException, ParserConfigurationException {
+        this.formatting = formatting;
         layoutDir = layout.getParent();
         doc = getDocument(layout);
         layoutType = doc.getDocumentElement().getAttribute("type");
     }
 
-    private Document getDocument(File layout) throws ParserConfigurationException, SAXException, IOException {
-        DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
-        dbFactory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-        dbFactory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
-        DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
-         return dBuilder.parse(layout);
-    }
-
     public static String getInType(String fieldValue, String fieldType) {
-        String fieldValueInType = "";
+        String fieldValueInType;
         if (fieldValue.isEmpty()) {
             throw new IllegalArgumentException("empty input");
         }
         switch (fieldType.toLowerCase()) {
             case PARSD:
-                if (fieldValue.length() < 4) {
-                    throw new IllegalArgumentException("minimum 4 hex chars are required");
-                }
-                int parsd = Integer.parseInt(fieldValue, 16);
-                if (parsd != 0) {
-                    Calendar cal = new GregorianCalendar(1966, Calendar.JANUARY, 2);
-                    cal.add(Calendar.DATE, parsd);
-                    Date newDate = cal.getTime();
-                    fieldValueInType = ddMMMyyyy.format(newDate);
-                }
+                fieldValueInType = convertToParsDate(fieldValue);
                 break;
             case TOD:
-                if  (fieldValue.length() < 8) {
-                    throw new IllegalArgumentException("minimum 8 hex chars are required");
-                }
-                BigInteger tod = new BigInteger(fieldValue.substring(0, 8), 16);
-                if (tod.intValue() != 0) {
-                    BigDecimal actualSeconds = new BigDecimal(TOD_ADJUST).multiply(new BigDecimal(tod));
-                    BigDecimal minutes = actualSeconds.divide(new BigDecimal(60), RoundingMode.CEILING);
-                    BigDecimal seconds = actualSeconds.remainder(new BigDecimal(60));
-                    Calendar cal = new GregorianCalendar(1900, Calendar.JANUARY, 1);
-                    cal.add(Calendar.MINUTE, minutes.intValue());
-                    cal.add(Calendar.SECOND, seconds.intValue());
-                    Date newDate = cal.getTime();
-                    fieldValueInType = ddMMMyyyy_hhmmss.format(newDate);
-                }
+                fieldValueInType = convertToTOD(fieldValue);
                 break;
             case ZTOD:
-                BigInteger ztod = new BigInteger(fieldValue.substring(0, 8), 16);
-                if (ztod.intValue() != 0) {
-                    Calendar cal = new GregorianCalendar(1966, Calendar.JANUARY, 3);
-                    cal.add(Calendar.MINUTE, ztod.intValue());
-                    Date newDate = cal.getTime();
-                    fieldValueInType = ddMMMyyyy_hhmmss.format(newDate);
-                }
+                fieldValueInType = convertToZTOD(fieldValue);
                 break;
             case MINS:
                 int mins = Integer.parseInt(fieldValue, 16);
                 fieldValueInType = String.format("%02d:%02d", mins / 60, mins % 60);
                 break;
             case HHMM:
-                if  (fieldValue.length() < 4) {
-                    throw new IllegalArgumentException("minimum 4 hex chars are required");
-                }
-                int hh = Integer.parseInt(fieldValue.substring(0, 2), 16);
-                int mm = Integer.parseInt(fieldValue.substring(2, 4), 16);
-                if (hh != 0 || mm != 0)
-                    fieldValueInType = String.format("%02d:%02d", hh, mm);
+                fieldValueInType = convertToHHMM(fieldValue);
                 break;
             case "b":
                 int b = Integer.parseUnsignedInt(fieldValue, 16);
@@ -136,7 +98,69 @@ class Dissector {
                 fieldValueInType = String.format("%d,%d", highNibble, lowNibble);
                 break;
             default:
-                fieldValueInType = fieldValue;
+                try {
+                    fieldValueInType = getSafeString(fieldValue);
+                } catch (Exception ue) {
+                    fieldValueInType = fieldValue;
+                }
+        }
+        return fieldValueInType;
+    }
+
+    public static String convertToHHMM(String fieldValue) {
+        String fieldValueInType = "";
+        if (fieldValue.length() < 4) {
+            throw new IllegalArgumentException("minimum 4 hex chars are required");
+        }
+        int hh = Integer.parseInt(fieldValue.substring(0, 2), 16);
+        int mm = Integer.parseInt(fieldValue.substring(2, 4), 16);
+        if (hh != 0 || mm != 0)
+            fieldValueInType = String.format("%02d:%02d", hh, mm);
+        return fieldValueInType;
+    }
+
+    public static String convertToZTOD(String fieldValue) {
+        String fieldValueInType = "";
+        BigInteger ztod = new BigInteger(fieldValue.substring(0, 8), 16);
+        if (ztod.intValue() != 0) {
+            Calendar cal = new GregorianCalendar(1966, Calendar.JANUARY, 3);
+            cal.add(Calendar.MINUTE, ztod.intValue());
+            Date newDate = cal.getTime();
+            fieldValueInType = new SimpleDateFormat("dd-MMM-yyyy hh:mm:ss").format(newDate);
+        }
+        return fieldValueInType;
+    }
+
+    public static String convertToTOD(String fieldValue) {
+        String fieldValueInType = "";
+        if (fieldValue.length() < 8) {
+            throw new IllegalArgumentException("minimum 8 hex chars are required");
+        }
+        BigInteger tod = new BigInteger(fieldValue.substring(0, 8), 16);
+        if (tod.intValue() != 0) {
+            BigDecimal actualSeconds = new BigDecimal(TOD_ADJUST).multiply(new BigDecimal(tod));
+            BigDecimal minutes = actualSeconds.divide(new BigDecimal(60), RoundingMode.CEILING);
+            BigDecimal seconds = actualSeconds.remainder(new BigDecimal(60));
+            Calendar cal = new GregorianCalendar(1900, Calendar.JANUARY, 1);
+            cal.add(Calendar.MINUTE, minutes.intValue());
+            cal.add(Calendar.SECOND, seconds.intValue());
+            Date newDate = cal.getTime();
+            fieldValueInType = new SimpleDateFormat("dd-MMM-yyyy hh:mm:ss").format(newDate);
+        }
+        return fieldValueInType;
+    }
+
+    public static String convertToParsDate(String fieldValue) {
+        String fieldValueInType = "";
+        if (fieldValue.length() < 4) {
+            throw new IllegalArgumentException("minimum 4 hex chars are required");
+        }
+        int parsd = Integer.parseInt(fieldValue, 16);
+        if (parsd != 0) {
+            Calendar cal = new GregorianCalendar(1966, Calendar.JANUARY, 2);
+            cal.add(Calendar.DATE, parsd);
+            Date newDate = cal.getTime();
+            fieldValueInType = new SimpleDateFormat("dd-MMM-yyyy").format(newDate);
         }
         return fieldValueInType;
     }
@@ -201,27 +225,6 @@ class Dissector {
         return (Element) next;
     }
 
-    private String getFieldValue(long fieldLength) {
-        return getFieldValue(fieldLength, true);
-    }
-
-    private String getFieldValue(long fieldLength, boolean clearInput) {
-        String value;
-        if (layoutType.equalsIgnoreCase(DSECT)) {
-            fieldLength = fieldLength * 2;
-        }
-        if (fieldLength > 0 && inputStr.length() >= fieldLength) {
-            value = inputStr.substring(0, (int) fieldLength);
-            if(clearInput)
-                inputStr = inputStr.substring((int)fieldLength);
-        } else {
-            value = inputStr;
-            if (clearInput)
-                inputStr = "";
-        }
-        return value;
-    }
-
     public static Map<String, String> convertToMap(String input) {
         Map<String, String> resultMap = new HashMap<>();
         String[] pairs = input.split(",");
@@ -243,14 +246,102 @@ class Dissector {
 
     public static List<String> getBitValue(int i, Map<String, String> fieldValuesMap) {
         List<String> values = new ArrayList<>();
-        for(int j = 0; j < 8; j++) {
+        for (int j = 0; j < 8; j++) {
             String key = String.format("%02x", 1L << j);
             String val = fieldValuesMap.get(key);
-            if (isBitSet(i,j) && val != null) {
+            if (isBitSet(i, j) && val != null) {
                 values.add(val);
             }
         }
         return values;
+    }
+
+    // Helper method to convert a hexadecimal string to bytes
+    public static byte[] hexStringToBytes(String hexString) {
+        int len = hexString.length();
+        byte[] result = new byte[len / 2];
+        for (int i = 0; i < len; i += 2) {
+            result[i / 2] = (byte) Integer.parseInt(hexString.substring(i, i + 2), 16);
+        }
+        return result;
+    }
+
+    public static String getHexDumpWithOffset(byte[] data, int lineLength) {
+        StringBuilder result = new StringBuilder();
+        int offset = 0;
+        while (offset < data.length) {
+            StringBuilder hexLine = new StringBuilder();
+            StringBuilder charLine = new StringBuilder();
+
+            for (int i = 0; i < lineLength && offset + i < data.length; i++) {
+                byte currentByte = data[offset + i];
+                String hexValue = String.format("%02X", currentByte);
+
+                hexLine.append(hexValue).append(" ");
+                charLine.append(Character.isISOControl((char) currentByte) ? '.' : (char) currentByte);
+            }
+
+            result.append(String.format("%08X: %-48s %s%n", offset, hexLine, charLine));
+            offset += lineLength;
+        }
+        return result.toString();
+    }
+
+    public static String getHexDump(String hexString) {
+        byte[] data;
+        try {
+            data = new String(hexStringToBytes(hexString), "cp500").getBytes();
+        } catch (UnsupportedEncodingException ue) {
+            data = hexStringToBytes(hexString);
+        }
+        return getHexDumpWithOffset(data, 16);
+    }
+
+    public static String getSafeString(byte[] data) {
+        StringBuilder result = new StringBuilder();
+        for (byte currentByte : data) {
+            result.append(Character.isISOControl((char) currentByte) ? '.' : (char) currentByte);
+        }
+        return result.toString();
+    }
+
+    public static String getSafeString(String hexString) {
+        byte[] data;
+        try {
+            data = new String(hexStringToBytes(hexString), "cp500").getBytes();
+        } catch (UnsupportedEncodingException ue) {
+            data = hexStringToBytes(hexString);
+        }
+        return getSafeString(data);
+    }
+
+    private Document getDocument(File layout) throws ParserConfigurationException, SAXException, IOException {
+        DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+        dbFactory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+        dbFactory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+        DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
+        return dBuilder.parse(layout);
+    }
+
+    private String getFieldValue(long fieldLength) {
+        return getFieldValue(fieldLength, true);
+    }
+
+    private String getFieldValue(long fieldLength, boolean clearInput) {
+        String value;
+        if (layoutType.equalsIgnoreCase(DSECT)) {
+            fieldLength = fieldLength * 2;
+        }
+        if (fieldLength > 0 && inputStr.length() >= fieldLength) {
+            value = inputStr.substring(0, (int) fieldLength);
+            if (clearInput)
+                inputStr = inputStr.substring((int) fieldLength);
+        } else {
+            value = inputStr;
+            if (clearInput)
+                inputStr = "";
+        }
+        return value;
     }
 
     String parseWith(String hexString) {
@@ -274,14 +365,12 @@ class Dissector {
             String fieldLength = field.getAttribute(LENGTH);
             String fieldValuesAttr = field.getAttribute("values");
             String fieldMinusAttr = field.getAttribute("minus");
-//            String fieldSearchTypeAttr = field.getAttribute("searchtype");
-            String fieldValue;
             var fieldMinusVal = 0;
             if (!fieldMinusAttr.isEmpty()) {
                 try {
                     fieldMinusVal = Integer.parseInt(fieldMinusAttr);
-                }catch (Exception any) {
-                    res.append(String.format("%nInvalid attribute (minus) for %s %n", fieldName ));
+                } catch (Exception any) {
+                    res.append(String.format("%nInvalid attribute (minus) for %s %n", fieldName));
                     return -10;
                 }
             }
@@ -295,7 +384,14 @@ class Dissector {
                     return -10;
                 }
             }
-            String temp = String.format(formatting.equals("h")?"(%x.%s) %s": "(%d.%s) %s", displ, fieldLength, fieldName);
+            String temp;
+            if (formatting.equals("h")) {
+                temp = String.format("(%x.%s) %s", displ, fieldLength, fieldName);
+            } else if (formatting.equals("d")) {
+                temp = String.format("(%d.%s) %s", displ, fieldLength, fieldName);
+            } else {
+                temp = fieldName;
+            }
             if (!fieldLength.isEmpty()) {
                 displ += fieldLengthInt;
             }
@@ -315,7 +411,7 @@ class Dissector {
             }
             StringBuilder outputString = new StringBuilder();
             outputString.append(String.format("%35s : ", temp));
-            switch (fieldKind){
+            switch (fieldKind) {
                 case COUNTER:
                     Integer x4 = handleCounter(parent, field, outputString, fieldLengthInt, fieldForAttr);
                     if (x4 != null) return x4;
@@ -361,7 +457,7 @@ class Dissector {
             int i;
             try {
                 i = Integer.parseInt(fieldValue, 16);
-            }catch (NumberFormatException nfe) {
+            } catch (NumberFormatException nfe) {
                 res.append(String.format("%nInvalid data: %s%n", fieldValue));
                 return -10;
             }
@@ -386,15 +482,18 @@ class Dissector {
             if (!fit.isEmpty()) {
                 formatterFit = String.format(" = '%s'", fit);
             }
-            var fval1 = fieldValuesMap.get(fieldValue);
-            var fval = fieldValuesMap.get(fit);
-            if (fval1 == null && fval != null) {
-                fieldValueMeaning = String.format(" (%s)", fval);
+            if (fieldValue.length() > 32) {
+                res.append(LS).append(getHexDump(fieldValue)).append(LS);
+            } else {
+                var fval1 = fieldValuesMap.get(fieldValue);
+                var fval = fieldValuesMap.get(fit);
+                if (fval1 == null && fval != null) {
+                    fieldValueMeaning = String.format(" (%s)", fval);
+                }
+                res.append(String.format("%s%s%s%n", fieldValue, formatterFit, fieldValueMeaning == null ? "" : fieldValueMeaning));
             }
-            res.append(String.format("%s%s%s%n", fieldValue, formatterFit, fieldValueMeaning ==null?"":fieldValueMeaning));
-
-            if (fieldValue.length() != 2* fieldLengthInt) {
-                res.append(String.format("Warning: %s value not lengthy enough (Current length: %d)%n", fieldName, fieldValue.length()/2));
+            if (fieldValue.length() != 2 * fieldLengthInt) {
+                res.append(String.format("Warning: %s value not lengthy enough (Current length: %d)%n", fieldName, fieldValue.length() / 2));
                 return -11;
             }
         } else {
@@ -421,10 +520,10 @@ class Dissector {
             return -3;
         }
         var iRepeatCount = 0;
-        var radix = layoutType.equalsIgnoreCase(DSECT)? 16: 10;
+        var radix = layoutType.equalsIgnoreCase(DSECT) ? 16 : 10;
         try {
             iRepeatCount = Integer.parseInt(repeatCount, radix);
-        }catch (NumberFormatException nfe) {
+        } catch (NumberFormatException nfe) {
             res.append(String.format("Invalid counter %s%n", repeatCount));
             return -2;
         }
@@ -440,8 +539,8 @@ class Dissector {
                 return -1;
             }
         }
-        for (int i=0; i< iRepeatCount; i++) {
-            res.append(String.format("%s %d of %d :%n", fieldForAttr, i+1, iRepeatCount));
+        for (int i = 0; i < iRepeatCount; i++) {
+            res.append(String.format("%s %d of %d :%n", fieldForAttr, i + 1, iRepeatCount));
             int ret = parseWith(currentStruc);
             if (ret != 0) {
                 return -1;
@@ -466,7 +565,7 @@ class Dissector {
         }
         Element currentVersionElement = getMatchingElement(parent, VERSION, "name", versionNum, START);
         headElement = getNextSiblingHeadElement(field);
-        if (headElement != null ) {
+        if (headElement != null) {
             int ret = parseWith(headElement);
             if (ret != 0) {
                 return -1;
@@ -481,8 +580,8 @@ class Dissector {
             String[] includeVers = includeAttr.split(",");
             res.append(String.format("Includes %d version(s): %s%n", includeVers.length, includeAttr));
             int ret = 0;
-            for(String v: includeVers) {
-                if(!v.isEmpty()) {
+            for (String v : includeVers) {
+                if (!v.isEmpty()) {
                     Element includedVersionElement = getMatchingElement(parent, VERSION, "name", v, START);
                     if (includedVersionElement != null) {
                         ret = parseWith(includedVersionElement);
@@ -513,7 +612,7 @@ class Dissector {
             String fit;
             try {
                 fit = getInType(groupName, fieldType);
-            }catch (Exception any) {
+            } catch (Exception any) {
                 res.append(String.format("%nError: Invalid hex %s%n", any.getMessage()));
                 return -10;
             }
@@ -550,7 +649,7 @@ class Dissector {
         Element currentStruc;
         res.append(outputString);
         fieldValue = getFieldValue(fieldLengthInt);
-        int intFieldValue = 0;
+        int intFieldValue;
         if (layoutType.equalsIgnoreCase(DSECT)) {
             try {
                 intFieldValue = Integer.parseInt(fieldValue, 16);
@@ -566,8 +665,8 @@ class Dissector {
                 return -10;
             }
             res.append(String.format("%s = '%s'%n", fieldValue, fit));
-            if (fieldValue.length()/2 != fieldLengthInt) {
-                res.append(String.format("Warning: %s value not lengthy enough (Current length: %d)%n", fieldName, fieldValue.length()/2));
+            if (fieldValue.length() / 2 != fieldLengthInt) {
+                res.append(String.format("Warning: %s value not lengthy enough (Current length: %d)%n", fieldName, fieldValue.length() / 2));
             }
         } else {
             try {
@@ -597,7 +696,7 @@ class Dissector {
             res.append(String.format("---%s Size=%d%n", fieldForAttr, intFieldValue));
             inputStr = strucValue;
             int ret = 0;
-            while(!inputStr.isEmpty()) {
+            while (!inputStr.isEmpty()) {
                 ret = parseWith(currentStruc);
                 if (ret != 0) {
                     break;
@@ -628,15 +727,19 @@ class Dissector {
             if (strucName.isEmpty()) {
                 String opString = "";
                 if (layoutType.equalsIgnoreCase(DSECT)) {
-                    opString += String.format("%35s : ", String.format("(%d.%d) %s", displ, fieldValue.length()/2, fieldName));
-                    String fit;
-                    try {
-                        fit = getInType(fieldValue, fieldType);
-                    } catch (Exception any){
-                        res.append(String.format("%nInvalid data %s %s %s%n", fieldName, any.getMessage(), fieldValue));
-                        return -10;
+                    opString += String.format("%35s : ", String.format("(%d.%d) %s", displ, fieldValue.length() / 2, fieldName));
+                    if (fieldValue.length() > 32) {
+                        res.append(opString).append(LS).append(getHexDump(fieldValue)).append(LS);
+                    } else {
+                        String fit;
+                        try {
+                            fit = getInType(fieldValue, fieldType);
+                        } catch (Exception any) {
+                            res.append(String.format("%nInvalid data %s %s %s%n", fieldName, any.getMessage(), fieldValue));
+                            return -10;
+                        }
+                        res.append(String.format("%s%s = '%s'%n", opString, fieldValue, fit));
                     }
-                    res.append(String.format("%s%s = '%s'%n", opString, fieldValue, fit));
                 } else {
                     opString += String.format("%35s: ", String.format("(%d.%d) %s", displ, fieldValue.length(), fieldName));
                     res.append(String.format("%s'%s'%n", opString, fieldValue));
@@ -655,7 +758,7 @@ class Dissector {
                 String restOfInput = getFieldValue(-1);
                 inputStr = fieldValue;
                 int ret1 = 0;
-                while(!inputStr.isEmpty()) {
+                while (!inputStr.isEmpty()) {
                     ret1 = parseWith(currentStruc2);
                     if (ret1 != 0) {
                         break;

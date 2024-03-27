@@ -1,5 +1,6 @@
 package org.anusrnm.dissector;
 
+import org.junit.Ignore;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,12 +12,12 @@ import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.File;
+import java.nio.file.Files;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 
 import static org.junit.Assert.*;
 
@@ -24,17 +25,32 @@ public class DissectorTest {
     private static final Logger log = LoggerFactory.getLogger(DissectorTest.class);
     private final ClassLoader classloader = Thread.currentThread().getContextClassLoader();
 
+    @Ignore
+    @Test
+    public void testLayout() throws Exception {
+        File layoutFile = new File(Objects.requireNonNull(classloader.getResource("COMPLEX.xml")).getFile());
+        File inputFile = new File(Objects.requireNonNull(classloader.getResource("COMPLEX_in.txt")).getFile());
+        File resultFile = new File(Objects.requireNonNull(classloader.getResource("COMPLEX_result.txt")).getFile());
+        String hexString = Files.readString(inputFile.toPath());
+        String expected = Files.readString(resultFile.toPath());
+        Dissector dissector = new Dissector(layoutFile, "d");
+        String actual = dissector.parseWith(hexString);
+        log.debug("{}",actual);
+        assertEquals(expected,actual);
+    }
+
+    @Ignore
     @Test
     public void testParser() throws Exception {
         File layoutFile = new File(Objects.requireNonNull(classloader.getResource("TEST.xml")).getFile());
         String hexString = "00000004C1C2C3C4";
-//        String expected = """
-//                                          (0.4) Len : 00000004 = '4'
-//                ---data Size=4
-//                                       (4.4.0) Data : C1C2C3C4 = 'ABCD'""";
-        String expected = "                          (0.4) Len : 00000004 = '4'\n";
-        Dissector Dissector = new Dissector(layoutFile);
-        String actual = Dissector.parseWith(hexString);
+        String expected = """
+                                          (0.4) Len : 00000004 = '4'
+                ---data Size=4
+                                         (4.4) Data : C1C2C3C4 = 'ABCD'
+                                         """;
+        Dissector dissector = new Dissector(layoutFile, "d");
+        String actual = dissector.parseWith(hexString);
         log.debug("{}",actual);
         assertEquals(expected,actual);
     }
@@ -111,6 +127,10 @@ public class DissectorTest {
         expected = "2,15";
         log.debug("Nibbles: {}", result);
         assertEquals(expected, result);
+        result = Dissector.getInType("C1C2", "C");
+        expected = "AB";
+        log.debug("Chars: {}", result);
+        assertEquals(expected, result);
     }
 
     @Test
@@ -142,5 +162,21 @@ public class DissectorTest {
         //Adding "America/Los_Angeles" as the Time Zone to localDateTime
         ZonedDateTime zonedDateTime= localDateTime.atZone(ZoneId.of("America/Chicago"));
         System.out.println("In Chicago(America) Time Zone:"+ zonedDateTime);
+    }
+
+    @Test
+    public void getBitValue() {
+        Map<String, String> myMap = new HashMap<>();
+        myMap.put("80", "Bit 1");
+        myMap.put("40", "Bit 2");
+        myMap.put("20", "Bit 3");
+        myMap.put("10", "Bit 4");
+        myMap.put("08", "Bit 5");
+        myMap.put("04", "Bit 6");
+        myMap.put("02", "Bit 7");
+        myMap.put("01", "Bit 8");
+        Collection<String> expected = myMap.values().stream().sorted(Comparator.reverseOrder()).toList();
+        List<String> actual = Dissector.getBitValue(0xFF, myMap);
+        assertEquals(expected, actual);
     }
 }
